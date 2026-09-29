@@ -1,0 +1,162 @@
+[
+ {
+  "family": "L1",
+  "setting": "\u03bb=0.3",
+  "l0": 389.8,
+  "fve": 0.934,
+  "dead": 0.01,
+  "dense": 0.649,
+  "ce": 4.937,
+  "loss_recovered": 0.993
+ },
+ {
+  "family": "L1",
+  "setting": "\u03bb=1",
+  "l0": 75.7,
+  "fve": 0.867,
+  "dead": 0.024,
+  "dense": 0.026000000000000002,
+  "ce": 4.945,
+  "loss_recovered": 0.99
+ },
+ {
+  "family": "L1",
+  "setting": "\u03bb=3",
+  "l0": 15.4,
+  "fve": 0.746,
+  "dead": 0.188,
+  "dense": 0.002,
+  "ce": 5.124,
+  "loss_recovered": 0.922
+ },
+ {
+  "family": "L1",
+  "setting": "\u03bb=10",
+  "l0": 1.2,
+  "fve": -0.132,
+  "dead": 0.996,
+  "dense": 0.0,
+  "ce": 7.692,
+  "loss_recovered": -0.048
+ },
+ {
+  "family": "TopK",
+  "setting": "k=8",
+  "l0": 8.0,
+  "fve": 0.753,
+  "dead": 0.757,
+  "dense": 0.002,
+  "ce": 5.185,
+  "loss_recovered": 0.899
+ },
+ {
+  "family": "TopK",
+  "setting": "k=16",
+  "l0": 16.0,
+  "fve": 0.8290000000000001,
+  "dead": 0.551,
+  "dense": 0.004,
+  "ce": 4.992,
+  "loss_recovered": 0.972
+ },
+ {
+  "family": "TopK",
+  "setting": "k=32",
+  "l0": 32.0,
+  "fve": 0.88,
+  "dead": 0.237,
+  "dense": 0.01,
+  "ce": 4.942,
+  "loss_recovered": 0.991
+ },
+ {
+  "family": "TopK",
+  "setting": "k=64",
+  "l0": 64.0,
+  "fve": 0.9079999999999999,
+  "dead": 0.061,
+  "dense": 0.025,
+  "ce": 4.924,
+  "loss_recovered": 0.998
+ },
+ {
+  "family": "TopK",
+  "setting": "k=128",
+  "l0": 128.0,
+  "fve": 0.927,
+  "dead": 0.008,
+  "dense": 0.073,
+  "ce": 4.933,
+  "loss_recovered": 0.9940000000000001
+ },
+ {
+  "family": "TopK",
+  "setting": "k=256",
+  "l0": 256.0,
+  "fve": 0.945,
+  "dead": 0.0,
+  "dense": 0.17800000000000002,
+  "ce": 4.899,
+  "loss_recovered": 1.0070000000000001
+ },
+ {
+  "family": "TopK+aux",
+  "setting": "k=8",
+  "l0": 8.0,
+  "fve": 0.831,
+  "dead": 0.129,
+  "dense": 0.002,
+  "ce": 5.058,
+  "loss_recovered": 0.9470000000000001
+ },
+ {
+  "family": "TopK+aux",
+  "setting": "k=16",
+  "l0": 16.0,
+  "fve": 0.867,
+  "dead": 0.08800000000000001,
+  "dense": 0.004,
+  "ce": 4.962,
+  "loss_recovered": 0.983
+ },
+ {
+  "family": "TopK+aux",
+  "setting": "k=32",
+  "l0": 32.0,
+  "fve": 0.889,
+  "dead": 0.057999999999999996,
+  "dense": 0.01,
+  "ce": 4.941,
+  "loss_recovered": 0.992
+ },
+ {
+  "family": "TopK+aux",
+  "setting": "k=64",
+  "l0": 64.0,
+  "fve": 0.909,
+  "dead": 0.017,
+  "dense": 0.026000000000000002,
+  "ce": 4.922,
+  "loss_recovered": 0.9990000000000001
+ },
+ {
+  "family": "TopK+aux",
+  "setting": "k=128",
+  "l0": 128.0,
+  "fve": 0.927,
+  "dead": 0.003,
+  "dense": 0.07200000000000001,
+  "ce": 4.93,
+  "loss_recovered": 0.996
+ },
+ {
+  "family": "TopK+aux",
+  "setting": "k=256",
+  "l0": 256.0,
+  "fve": 0.945,
+  "dead": 0.0,
+  "dense": 0.17800000000000002,
+  "ce": 4.908,
+  "loss_recovered": 1.004
+ }
+]
