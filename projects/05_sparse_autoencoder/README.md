@@ -31,39 +31,84 @@ cheats the L1 penalty by shrinking `f` and growing `W_dec`.
 ## Run it
 
 ```bash
-python train_sae.py                  # ~3-4 min on CPU
-python train_sae.py --l1 0.5        # sparser, worse reconstruction
+python train_sae.py                  # ~1-2 min on CPU
+python train_sae.py --l1 3          # sparser, worse reconstruction
+python sweep_l1.py                  # sparsity/fidelity trade-off, ~6 min
 ```
 
 Downloads tiny-shakespeare (~1 MB), collects ~60k layer-6 residual-stream
-vectors from GPT-2 small, trains a 768→3072 SAE, then prints top-activating
-contexts for a sample of features.
+vectors from GPT-2 small, trains a 768→3072 SAE, measures how much LM loss
+survives splicing the reconstruction back into the model, then prints
+top-activating contexts for a sample of features.
+
+**Position 0 is excluded.** GPT-2's first token is an "attention sink" whose
+residual norm is ~40× any other position's: kept in, those <1% of tokens carry
+>90% of the squared norm and dominate the scale normalization and the MSE.
 
 ## What you should see
 
 ```
-step     0  mse 7040.042  L0 (active feats)  1545.5
-step   999  mse   18.991  L0 (active feats)   491.9
+step     0  mse 2267.390  L0 (active feats)  1544.5
+step  1999  mse   52.595  L0 (active feats)    75.7
+
+L0 75.7   variance explained 86.7%
+LM loss: clean 4.918  with SAE 4.945  mean-ablated 7.564  -> 99.0% of loss recovered
 ```
 
-and per-feature summaries like:
+**Loss recovered** is the metric that matters: it asks whether the model can
+still *use* the reconstruction. 0% = as bad as replacing layer 6 with its mean
+activation, 100% = as good as the original.
+
+Per-feature summaries — at this sparsity most sampled features have an
+obvious theme:
 
 ```
-feature 2834 (fires on 0.1% of tokens):
-    ...ET:\nO princely[[ Buckingham]]
-    ...: all the swords\nIn[[ Italy]]
+feature 326 (fires on 0.4% of tokens):
+    ... bear against the great Auf[[id]]
+    ... hearing. Stand, Auf[[id]]
+
+feature 2827 (fires on 3.4% of tokens):
+    ... years upon thee; and thou[[ art]]
+    ... to them,\nThou[[ art]]
+
+feature 23 (fires on 5.8% of tokens):
+    ...\nBRUTUS:\n[[Sir]]
+    ...MENENIUS:\n[[Sir]]
 ```
 
-Skim the sampled features: some will have an obvious theme (proper names,
-punctuation, a specific word family), others won't. That mixed picture is
-honest — feature quality depends heavily on data volume, dictionary size, and
-the sparsity/fidelity trade-off.
+Others are still mixed (e.g. a feature on `restrain`, `blind`, `ruin`,
+`strong`). Feature quality depends heavily on data volume, dictionary size,
+and the sparsity/fidelity trade-off.
+
+## The L1 sweep
+
+![L0 vs loss recovered](results/sweep_l1.png)
+
+| λ (`--l1`) | L0 | variance explained | dead feats | feats firing on >10% | loss recovered |
+|---:|---:|---:|---:|---:|---:|
+| 0.2 | 571 | 94.9% | 30 | 2116 | 99.5% |
+| **1** | **76** | **86.7%** | **75** | **80** | **99.0%** |
+| 3 | 15 | 74.6% | 578 | 6 | 92.2% |
+| 10 | 1.2 | −13% | 3061 | 1 | −4.8% |
+| 30 | 0.2 | −61% | 2157 | 0 | −182% |
+| 100 | 0.1 | −78% | 3015 | 0 | −94% |
+
+- **λ=0.2 (the old default) is barely sparse**: L0≈571 out of 768 dimensions,
+  and 2/3 of features fire on >10% of tokens. It is essentially a dense
+  re-encoding, and its features are correspondingly vague. Near-perfect loss
+  recovery is not evidence of a good SAE on its own; always read it together
+  with L0.
+- **λ=1–3 is the useful regime**: L0 in the 15–75 range of production SAEs,
+  with most of the loss kept.
+- **λ≥10 collapses**: almost every feature dies, and the reconstruction is
+  worse than just using the mean activation (negative loss recovered).
 
 ## Honest caveats
 
-- This toy run uses ~60k tokens; real SAEs train on **billions**. L0≈500 is
-  far from the L0≈20–100 of production SAEs. Expect suggestive, not clean,
-  features.
+- This toy run uses ~60k tokens; real SAEs train on **billions**. Expect
+  suggestive, not clean, features.
+- Loss recovered is measured on 20 chunks that are also in the training set,
+  so it is optimistic.
 - Known open problems: dead features, feature splitting, and whether SAE
   features are the model's "real" units at all. See
   [SAELens](https://github.com/jbloomAus/SAELens) and
@@ -73,7 +118,8 @@ the sparsity/fidelity trade-off.
 
 ## Extensions
 
-- Increase `--l1` and `--steps`; plot the sparsity/MSE Pareto frontier.
+- Rerun `sweep_l1.py` with more `--steps` and a larger `--max-tokens`: does
+  more data push the frontier up? Track dead features as you go.
 - Train on MLP activations instead of the residual stream.
 - Pick one interpretable feature and *steer*: add its decoder direction to the
   residual stream during generation and watch the output change.
