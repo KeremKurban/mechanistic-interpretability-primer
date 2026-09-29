@@ -28,12 +28,28 @@ loss  = ‖x − x_hat‖² + λ·Σf                 # fidelity + L1 sparsity
 Decoder rows are renormalized to unit norm every step — otherwise the model
 cheats the L1 penalty by shrinking `f` and growing `W_dec`.
 
+### Top-K variant (Gao et al., 2025)
+
+```
+f     = TopK(ReLU(W_enc (x − b_dec) + b_enc))   # keep the k largest, zero the rest
+loss  = ‖x − x_hat‖²                            # no L1 term
+```
+
+Sparsity is set directly (L0 = k) instead of being tuned through λ, and the
+surviving activations are not shrunk by an L1 penalty. Small k leaves many
+features that never win the top-k and stop getting gradient ("dead"); the
+**AuxK** loss (`--aux-k`) asks dead features to reconstruct the main SAE's
+residual error, which gives them a gradient again. This is the architecture
+used by most recent SAE work, e.g. [SAE steering of medical VLMs](https://arxiv.org/abs/2605.24977)
+(k=64, 8× dictionary).
+
 ## Run it
 
 ```bash
 python train_sae.py                  # ~1-2 min on CPU
 python train_sae.py --l1 3          # sparser, worse reconstruction
-python sweep_l1.py                  # sparsity/fidelity trade-off, ~6 min
+python train_sae.py --k 64 --aux-k 384   # Top-K SAE with dead-feature loss
+python sweep.py                     # L1 vs Top-K trade-off curves, ~20 min
 ```
 
 Downloads tiny-shakespeare (~1 MB), collects ~60k layer-6 residual-stream
@@ -80,28 +96,58 @@ Others are still mixed (e.g. a feature on `restrain`, `blind`, `ruin`,
 `strong`). Feature quality depends heavily on data volume, dictionary size,
 and the sparsity/fidelity trade-off.
 
-## The L1 sweep
+## L1 vs Top-K sweep
 
-![L0 vs loss recovered](results/sweep_l1.png)
+![L0 vs loss recovered](results/sweep.png)
 
-| λ (`--l1`) | L0 | variance explained | dead feats | feats firing on >10% | loss recovered |
-|---:|---:|---:|---:|---:|---:|
-| 0.2 | 571 | 94.9% | 30 | 2116 | 99.5% |
-| **1** | **76** | **86.7%** | **75** | **80** | **99.0%** |
-| 3 | 15 | 74.6% | 578 | 6 | 92.2% |
-| 10 | 1.2 | −13% | 3061 | 1 | −4.8% |
-| 30 | 0.2 | −61% | 2157 | 0 | −182% |
-| 100 | 0.1 | −78% | 3015 | 0 | −94% |
+| SAE | L0 | variance explained | dead | fire on >10% | loss recovered |
+|---|---:|---:|---:|---:|---:|
+| L1, λ=0.3 | 390 | 93.4% | 1.0% | 64.9% | 99.3% |
+| L1, λ=1 | 76 | 86.7% | 2.4% | 2.6% | 99.0% |
+| L1, λ=3 | 15 | 74.6% | 18.8% | 0.2% | 92.2% |
+| L1, λ=10 | 1.2 | −13.2% | 99.6% | 0.0% | −4.8% |
+| Top-K, k=8 | 8 | 75.3% | 75.7% | 0.2% | 89.9% |
+| Top-K, k=16 | 16 | 82.9% | 55.1% | 0.4% | 97.2% |
+| Top-K, k=32 | 32 | 88.0% | 23.7% | 1.0% | 99.1% |
+| Top-K, k=64 | 64 | 90.8% | 6.1% | 2.5% | 99.8% |
+| Top-K, k=128 | 128 | 92.7% | 0.8% | 7.3% | 99.4% |
+| Top-K+AuxK, k=8 | 8 | 83.1% | 12.9% | 0.2% | 94.7% |
+| Top-K+AuxK, k=16 | 16 | 86.7% | 8.8% | 0.4% | 98.3% |
+| Top-K+AuxK, k=32 | 32 | 88.9% | 5.8% | 1.0% | 99.2% |
+| **Top-K+AuxK, k=64** | **64** | **90.9%** | **1.7%** | **2.6%** | **99.9%** |
+| Top-K+AuxK, k=128 | 128 | 92.7% | 0.3% | 7.2% | 99.6% |
 
-- **λ=0.2 (the old default) is barely sparse**: L0≈571 out of 768 dimensions,
-  and 2/3 of features fire on >10% of tokens. It is essentially a dense
-  re-encoding, and its features are correspondingly vague. Near-perfect loss
-  recovery is not evidence of a good SAE on its own; always read it together
-  with L0.
-- **λ=1–3 is the useful regime**: L0 in the 15–75 range of production SAEs,
-  with most of the loss kept.
-- **λ≥10 collapses**: almost every feature dies, and the reconstruction is
-  worse than just using the mean activation (negative loss recovered).
+(Full numbers incl. k=256 in `results/sweep.json`; its >100% loss recovered is
+evaluation noise from the 20-chunk estimate.)
+
+- **L1 at λ=0.2–0.3 is barely sparse**: L0≈390–570 of 768 dimensions and
+  most features fire on >10% of tokens — a dense re-encoding with vague
+  features. Near-perfect loss recovery means little without low L0.
+- **Top-K beats L1 at every matched L0.** At L0≈16: 97–98% of loss recovered
+  vs 92% for L1 (λ=3), and 83–87% vs 75% variance explained. L1 pays twice
+  for sparsity: it switches features off *and* shrinks the ones it keeps.
+- **Dead features are Top-K's failure mode**, and they get worse as k
+  shrinks (76% dead at k=8, 55% at k=16). AuxK cuts that to 13% and 9%, and
+  the revived features buy real fidelity at small k (90% → 95% at k=8).
+- **L1 collapses at high λ** (λ=10: almost all features die and the
+  reconstruction is worse than the mean activation). Top-K can't collapse
+  that way, since exactly k features are always active.
+
+Top-K+AuxK at k=64 gives the cleanest features we've seen at this scale:
+
+```
+feature 319 (fires on 0.6% of tokens):      feature 735 (fires on 0.9% of tokens):
+    ...ET:\nO princely[[ Buckingham]]            ...I cannot\nPut on the[[ gown]]
+    ...Here come the lords of[[ Buckingham]]     ...that so lamely and unf[[ashion]]
+                                                ...yet my mind gave me his[[ clothes]]
+feature 1623 (fires on 0.6% of tokens):
+    ...\nBRUTUS:\n[[Go]]                          feature 1051 (fires on 1.9% of tokens):
+    ...OUCESTER:\n[[Go]]                           ... them like a thing\nMade[[ by]]
+                                                ... bitterness of soul\nDenounced[[ against]]
+```
+
+— a name, a line-initial command, a *semantic* clothing feature spanning
+different tokens, and a grammatical "past participle → preposition" feature.
 
 ## Honest caveats
 
@@ -118,7 +164,7 @@ and the sparsity/fidelity trade-off.
 
 ## Extensions
 
-- Rerun `sweep_l1.py` with more `--steps` and a larger `--max-tokens`: does
+- Rerun `sweep.py` with more `--steps` and a larger `--max-tokens`: does
   more data push the frontier up? Track dead features as you go.
 - Train on MLP activations instead of the residual stream.
 - Pick one interpretable feature and *steer*: add its decoder direction to the

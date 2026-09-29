@@ -19,12 +19,20 @@ activations, trains the SAE on CPU in a few minutes, reports how much of the
 LM loss survives splicing the reconstruction back in, then prints the
 top-activating tokens (with context) for a sample of features.
 
+Top-K variant (Gao et al., 2025, "Scaling and evaluating sparse autoencoders"):
+    f      = TopK(ReLU(W_enc (x - b_dec) + b_enc))   # keep the k largest, zero the rest
+    loss   = ||x - x_hat||^2                          # no L1: sparsity is fixed at k
+Sparsity is set directly instead of tuned through l1, and there is no L1
+shrinkage of the surviving activations. --aux-k adds Gao et al.'s auxiliary
+loss against dead features.
+
 Usage:
     python train_sae.py [--steps 2000] [--dict-size 3072] [--l1 1.0]
+    python train_sae.py --k 64 [--aux-k 384]            # Top-K SAE
 
 Raising --l1 trades reconstruction fidelity for sparsity (fewer active
 features per token); the default gives L0~75 with ~99% of LM loss recovered.
-See sweep_l1.py for the full trade-off curve.
+See sweep.py for the full trade-off curve of both variants.
 Real SAE work uses far more data, bigger dictionaries, and tricks for dead
 features — see SAELens (https://github.com/jbloomAus/SAELens) for the
 production version of this.
@@ -43,8 +51,11 @@ DATA_URL = "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tiny
 
 
 class SparseAutoencoder(nn.Module):
-    def __init__(self, d_model, dict_size):
+    """ReLU SAE (trained with an L1 penalty), or Top-K SAE when k is given."""
+
+    def __init__(self, d_model, dict_size, k=None):
         super().__init__()
+        self.k = k
         self.W_enc = nn.Parameter(torch.empty(d_model, dict_size))
         self.W_dec = nn.Parameter(torch.empty(dict_size, d_model))
         self.b_enc = nn.Parameter(torch.zeros(dict_size))
@@ -54,8 +65,14 @@ class SparseAutoencoder(nn.Module):
             self.W_dec /= self.W_dec.norm(dim=1, keepdim=True)
             self.W_enc.copy_(self.W_dec.t())
 
+    def pre_acts(self, x):
+        return torch.relu((x - self.b_dec) @ self.W_enc + self.b_enc)
+
     def forward(self, x):
-        f = torch.relu((x - self.b_dec) @ self.W_enc + self.b_enc)
+        f = self.pre_acts(x)
+        if self.k is not None:
+            vals, idx = f.topk(self.k, dim=-1)
+            f = torch.zeros_like(f).scatter_(-1, idx, vals)
         x_hat = f @ self.W_dec + self.b_dec
         return x_hat, f
 
@@ -85,16 +102,32 @@ def collect_activations(model, tokenizer, text, layer, max_tokens, ctx_len, devi
     return torch.cat(acts), torch.cat(toks), torch.cat(tok_idx)
 
 
-def train_sae(acts, dict_size, l1_coeff, steps, batch_size, device, log_every=200):
-    sae = SparseAutoencoder(acts.shape[1], dict_size).to(device)
+def train_sae(acts, dict_size, l1_coeff, steps, batch_size, device, log_every=200,
+              k=None, aux_k=0, dead_steps=50, aux_coeff=1 / 32):
+    """L1 SAE if k is None, else Top-K SAE (l1_coeff is then ignored).
+
+    aux_k > 0 enables the AuxK loss from Gao et al. (2025): features that have
+    not fired for `dead_steps` batches are asked to reconstruct the main SAE's
+    residual error from their top-aux_k pre-activations. That gives dead
+    features a gradient again and revives many of them.
+    """
+    sae = SparseAutoencoder(acts.shape[1], dict_size, k=k).to(device)
     opt = torch.optim.Adam(sae.parameters(), lr=1e-3)
+    since_fired = torch.zeros(dict_size, device=device)
     for step in range(steps):
         idx = torch.randint(0, acts.shape[0], (batch_size,))
         x = acts[idx].to(device)
         x_hat, f = sae(x)
         mse = (x - x_hat).pow(2).sum(-1).mean()
-        l1 = f.sum(-1).mean()
-        loss = mse + l1_coeff * l1
+        loss = mse if k is not None else mse + l1_coeff * f.sum(-1).mean()
+        since_fired = torch.where((f > 0).any(0), 0.0, since_fired + 1)
+        dead = since_fired > dead_steps
+        if aux_k and dead.any():
+            err = (x - x_hat).detach()
+            pre = sae.pre_acts(x) * dead
+            vals, i = pre.topk(min(aux_k, int(dead.sum())), dim=-1)
+            err_hat = torch.zeros_like(pre).scatter_(-1, i, vals) @ sae.W_dec
+            loss = loss + aux_coeff * (err - err_hat).pow(2).sum(-1).mean()
         opt.zero_grad()
         loss.backward()
         opt.step()
@@ -153,7 +186,11 @@ def main():
     ap.add_argument("--model", default="gpt2")
     ap.add_argument("--layer", type=int, default=6, help="residual stream after block N")
     ap.add_argument("--dict-size", type=int, default=3072)
-    ap.add_argument("--l1", type=float, default=1.0)
+    ap.add_argument("--l1", type=float, default=1.0, help="L1 coefficient (L1 SAE only)")
+    ap.add_argument("--k", type=int, default=None,
+                    help="train a Top-K SAE with exactly k active features per token")
+    ap.add_argument("--aux-k", type=int, default=0,
+                    help="Top-K only: AuxK dead-feature loss with this many aux features (0 = off)")
     ap.add_argument("--steps", type=int, default=2000)
     ap.add_argument("--batch-size", type=int, default=1024)
     ap.add_argument("--max-tokens", type=int, default=60000)
@@ -184,7 +221,8 @@ def main():
     acts = acts / scale
 
     print("training SAE...")
-    sae = train_sae(acts, args.dict_size, args.l1, args.steps, args.batch_size, device)
+    sae = train_sae(acts, args.dict_size, args.l1, args.steps, args.batch_size, device,
+                    k=args.k, aux_k=args.aux_k)
 
     fve, l0 = reconstruction_stats(sae, acts, device)
     ids = tokenizer(text, return_tensors="pt").input_ids[0]
@@ -199,6 +237,7 @@ def main():
     with torch.no_grad():
         _, f_all = sae(acts.to(device))
     freq = (f_all > 0).float().mean(0)
+    print(f"dead features (fire on <0.01% of tokens): {(freq < 1e-4).float().mean():.1%}")
     alive = ((freq > 1e-4) & (freq < 0.3)).nonzero().flatten()
     print(f"\n{len(alive)} features fire on 0.01%-30% of tokens; sampling 10:")
 
